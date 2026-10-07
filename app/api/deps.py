@@ -39,7 +39,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 async def require_admin(user: CurrentUser) -> User:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only an admin can edit users.")
+        raise HTTPException(status_code=403, detail="Only an admin can access this.")
     return user
 
 

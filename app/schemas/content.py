@@ -1,5 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.workspace import WorkspaceOut
+
 
 class ProjectOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -18,6 +20,7 @@ class ProjectOut(BaseModel):
 class ProjectPage(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    workspace: WorkspaceOut
     data: list[ProjectOut]
     current_page: int = Field(serialization_alias="currentPage")
     total_pages: int = Field(serialization_alias="totalPages")
@@ -62,9 +65,26 @@ class EnvOut(BaseModel):
     project_id: str | None = Field(serialization_alias="projectId")
 
 
+class EnvDetail(EnvOut):
+    workspace: WorkspaceOut | None = None
+    project: ProjectOut | None = None
+
+
 class EnvPage(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    data: list[EnvOut]
+    current_page: int = Field(serialization_alias="currentPage")
+    total_pages: int = Field(serialization_alias="totalPages")
+    total_records: int = Field(serialization_alias="totalRecords")
+    limit: int
+
+
+class ProjectEnvPage(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    workspace: WorkspaceOut
+    project: ProjectOut
     data: list[EnvOut]
     current_page: int = Field(serialization_alias="currentPage")
     total_pages: int = Field(serialization_alias="totalPages")

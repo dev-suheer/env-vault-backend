@@ -80,13 +80,16 @@ async def signup(body: SignupIn, request: Request, db: Db) -> AuthOut:
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name is required.")
+    phone = body.phone.strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="Phone number is required.")
     now = utcnow()
     user = User(
         email=email,
         name=name,
         role=body.role,
         password_hash=hash_password(body.password),
-        phone="",
+        phone=phone,
         image=None,
         status=True,
         created_at=now,

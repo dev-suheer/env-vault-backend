@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, Db
 from app.core.security import to_ms, utcnow
+from app.models.content import Project
 from app.models.user import User
 from app.models.workspace import AuditLog, Workspace, WorkspaceMember
 from app.schemas.workspace import AuditOut, AuditPage, MemberOut, WorkspaceIn, WorkspaceOut, WorkspacePage
@@ -25,7 +26,7 @@ def parse_id(value: str) -> uuid.UUID:
         raise HTTPException(status_code=404, detail=MISSING) from None
 
 
-def workspace_out(workspace: Workspace) -> WorkspaceOut:
+def workspace_out(workspace: Workspace, project_count: int = 0) -> WorkspaceOut:
     members = sorted((member for member in workspace.members if member.status == ACTIVE), key=lambda member: member.user.email)
     return WorkspaceOut(
         id=str(workspace.id),
@@ -39,8 +40,25 @@ def workspace_out(workspace: Workspace) -> WorkspaceOut:
             MemberOut(id=str(member.user.id), email=member.user.email, name=member.user.name, access=member.access)
             for member in members
         ],
+        project_count=project_count,
         created=to_ms(workspace.created_at) or 0,
     )
+
+
+async def workspace_payload(db: Db, workspace: Workspace) -> WorkspaceOut:
+    counts = await project_counts(db, [workspace.id])
+    return workspace_out(workspace, counts.get(workspace.id, 0))
+
+
+async def project_counts(db: Db, workspace_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    if not workspace_ids:
+        return {}
+    rows = await db.execute(
+        select(Project.workspace_id, func.count())
+        .where(Project.workspace_id.in_(workspace_ids), Project.status == ACTIVE)
+        .group_by(Project.workspace_id)
+    )
+    return {workspace_id: count for workspace_id, count in rows.all()}
 
 
 def audit_out(entry: AuditLog) -> AuditOut:
@@ -142,7 +160,8 @@ async def create_workspace(body: WorkspaceIn, user: CurrentUser, db: Db) -> Work
     loaded = await load_workspace(db, workspace.id)
     if loaded is None:
         raise HTTPException(status_code=404, detail=MISSING)
-    return workspace_out(loaded)
+    counts = await project_counts(db, [loaded.id])
+    return workspace_out(loaded, counts.get(loaded.id, 0))
 
 
 @router.get("", response_model=WorkspacePage)
@@ -172,9 +191,10 @@ async def list_workspaces(
         .limit(limit)
     )
     total_records = await db.scalar(count_stmt) or 0
-    workspaces = await db.scalars(list_stmt)
+    workspaces = list(await db.scalars(list_stmt))
+    counts = await project_counts(db, [workspace.id for workspace in workspaces])
     return WorkspacePage(
-        data=[workspace_out(workspace) for workspace in workspaces],
+        data=[workspace_out(workspace, counts.get(workspace.id, 0)) for workspace in workspaces],
         current_page=page,
         total_pages=page_count(total_records, limit),
         total_records=total_records,
@@ -184,7 +204,9 @@ async def list_workspaces(
 
 @router.get("/{workspace_id}", response_model=WorkspaceOut)
 async def get_workspace(workspace_id: str, user: CurrentUser, db: Db) -> WorkspaceOut:
-    return workspace_out(await visible_workspace(db, user, workspace_id))
+    workspace = await visible_workspace(db, user, workspace_id)
+    counts = await project_counts(db, [workspace.id])
+    return workspace_out(workspace, counts.get(workspace.id, 0))
 
 
 @router.patch("/{workspace_id}", response_model=WorkspaceOut)
@@ -202,7 +224,8 @@ async def update_workspace(workspace_id: str, body: WorkspaceIn, user: CurrentUs
     if detail:
         add_audit(db, workspace.id, user, "Updated workspace", name, f"{detail}.")
     await db.flush()
-    return workspace_out(workspace)
+    counts = await project_counts(db, [workspace.id])
+    return workspace_out(workspace, counts.get(workspace.id, 0))
 
 
 @router.delete("/{workspace_id}", status_code=204)

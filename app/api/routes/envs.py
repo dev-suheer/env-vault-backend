@@ -6,13 +6,13 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, Db
-from app.api.routes.projects import visible_project
-from app.api.routes.workspaces import ACTIVE, DELETED, add_audit, can_view, page_count
+from app.api.routes.projects import project_out, visible_project
+from app.api.routes.workspaces import ACTIVE, DELETED, add_audit, can_view, page_count, workspace_payload
 from app.core.security import to_ms, utcnow
-from app.models.content import EnvFile, Variable
+from app.models.content import EnvFile, Project, Variable
 from app.models.user import User
 from app.models.workspace import Workspace, WorkspaceMember
-from app.schemas.content import EnvIn, EnvOut, EnvPage, ImportIn, VariableIn, VariableOut
+from app.schemas.content import EnvDetail, EnvIn, EnvOut, EnvPage, ImportIn, ProjectEnvPage, VariableIn, VariableOut
 
 router = APIRouter(tags=["envs"])
 MISSING = "No env file with that id."
@@ -30,7 +30,7 @@ def env_options():
     return (
         selectinload(EnvFile.owner),
         selectinload(EnvFile.variables),
-        selectinload(EnvFile.project),
+        selectinload(EnvFile.project).selectinload(Project.owner),
         selectinload(EnvFile.workspace).selectinload(Workspace.owner),
         selectinload(EnvFile.workspace).selectinload(Workspace.members).selectinload(WorkspaceMember.user),
     )
@@ -71,6 +71,14 @@ def env_out(env: EnvFile) -> EnvOut:
         owner_name=env.owner.name,
         workspace_id=str(env.workspace_id) if env.workspace_id else None,
         project_id=str(env.project_id) if env.project_id else None,
+    )
+
+
+async def env_detail(db: Db, env: EnvFile) -> EnvDetail:
+    return EnvDetail(
+        **env_out(env).model_dump(),
+        workspace=await workspace_payload(db, env.workspace) if env.workspace is not None else None,
+        project=project_out(env.project) if env.project is not None else None,
     )
 
 
@@ -139,8 +147,8 @@ async def list_personal_envs(
     return await list_envs(db, filters, page, limit)
 
 
-@router.post("/envs", response_model=EnvOut, status_code=201)
-async def create_personal_env(body: EnvIn, user: CurrentUser, db: Db) -> EnvOut:
+@router.post("/envs", response_model=EnvDetail, status_code=201)
+async def create_personal_env(body: EnvIn, user: CurrentUser, db: Db) -> EnvDetail:
     if user.role != "dev":
         raise HTTPException(status_code=403, detail="Only a dev can create a personal env.")
     name, description, kind = clean_env(body)
@@ -156,10 +164,10 @@ async def create_personal_env(body: EnvIn, user: CurrentUser, db: Db) -> EnvOut:
     )
     db.add(env)
     await db.flush()
-    return env_out(await visible_env(db, user, str(env.id)))
+    return await env_detail(db, await visible_env(db, user, str(env.id)))
 
 
-@router.get("/projects/{project_id}/envs", response_model=EnvPage)
+@router.get("/projects/{project_id}/envs", response_model=ProjectEnvPage)
 async def list_project_envs(
     project_id: str,
     user: CurrentUser,
@@ -168,7 +176,7 @@ async def list_project_envs(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     keyword: Annotated[str | None, Query(description="Match name or description")] = None,
     env: Annotated[str | None, Query()] = None,
-) -> EnvPage:
+) -> ProjectEnvPage:
     project = await visible_project(db, user, project_id)
     filters = [EnvFile.project_id == project.id, EnvFile.status == ACTIVE]
     if env is not None:
@@ -176,11 +184,20 @@ async def list_project_envs(
             raise HTTPException(status_code=400, detail="Choose Development, Staging, or Production.")
         filters.append(EnvFile.env_kind == env)
     keyword_filter(filters, keyword)
-    return await list_envs(db, filters, page, limit)
+    listed = await list_envs(db, filters, page, limit)
+    return ProjectEnvPage(
+        workspace=await workspace_payload(db, project.workspace),
+        project=project_out(project),
+        data=listed.data,
+        current_page=listed.current_page,
+        total_pages=listed.total_pages,
+        total_records=listed.total_records,
+        limit=listed.limit,
+    )
 
 
-@router.post("/projects/{project_id}/envs", response_model=EnvOut, status_code=201)
-async def create_project_env(project_id: str, body: EnvIn, user: CurrentUser, db: Db) -> EnvOut:
+@router.post("/projects/{project_id}/envs", response_model=EnvDetail, status_code=201)
+async def create_project_env(project_id: str, body: EnvIn, user: CurrentUser, db: Db) -> EnvDetail:
     project = await visible_project(db, user, project_id)
     if not can_view(user, project.workspace):
         raise HTTPException(status_code=404, detail="No project with that id.")
@@ -201,12 +218,12 @@ async def create_project_env(project_id: str, body: EnvIn, user: CurrentUser, db
     if description:
         detail = f'{detail} Description: "{description}".'
     add_audit(db, project.workspace_id, user, "Created env", name, detail)
-    return env_out(await visible_env(db, user, str(env.id)))
+    return await env_detail(db, await visible_env(db, user, str(env.id)))
 
 
-@router.get("/envs/{env_id}", response_model=EnvOut)
-async def get_env(env_id: str, user: CurrentUser, db: Db) -> EnvOut:
-    return env_out(await visible_env(db, user, env_id))
+@router.get("/envs/{env_id}", response_model=EnvDetail)
+async def get_env(env_id: str, user: CurrentUser, db: Db) -> EnvDetail:
+    return await env_detail(db, await visible_env(db, user, env_id))
 
 
 @router.patch("/envs/{env_id}", response_model=EnvOut)
@@ -298,25 +315,6 @@ async def import_variables(env_id: str, body: ImportIn, user: CurrentUser, db: D
         )
     await db.flush()
     return env_out(env)
-
-
-@router.get("/users/{email}/envs", response_model=EnvPage)
-async def list_user_envs(
-    email: str,
-    user: CurrentUser,
-    db: Db,
-    page: Annotated[int, Query(ge=1)] = 1,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    keyword: Annotated[str | None, Query()] = None,
-) -> EnvPage:
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only an admin can edit users.")
-    owner = await db.scalar(select(User).where(User.email == email.strip().lower()))
-    if owner is None or owner.role == "admin":
-        raise HTTPException(status_code=404, detail="No account with that email.")
-    filters = [EnvFile.owner_id == owner.id, EnvFile.status == ACTIVE]
-    keyword_filter(filters, keyword)
-    return await list_envs(db, filters, page, limit)
 
 
 async def editable_env(db: Db, user: User, env_id: str) -> EnvFile:

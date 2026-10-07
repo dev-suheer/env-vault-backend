@@ -19,6 +19,7 @@ class WorkspaceOut(BaseModel):
     owner_email: str = Field(serialization_alias="ownerEmail")
     owner_name: str = Field(serialization_alias="ownerName")
     members: list[MemberOut]
+    project_count: int = Field(serialization_alias="projectCount")
     created: int
 
 

@@ -15,6 +15,7 @@ from app.api.routes.workspaces import (
     describe_changes,
     page_count,
     visible_workspace,
+    workspace_payload,
 )
 from app.core.security import to_ms, utcnow
 from app.models.content import EnvFile, Project
@@ -87,6 +88,7 @@ async def list_projects(
         .limit(limit)
     )
     return ProjectPage(
+        workspace=await workspace_payload(db, workspace),
         data=[project_out(project) for project in projects],
         current_page=page,
         total_pages=page_count(total_records, limit),

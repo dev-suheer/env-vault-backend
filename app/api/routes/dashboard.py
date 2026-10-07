@@ -1,10 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import CurrentUser, Db
+from app.api.deps import AdminUser, Db
 from app.api.routes.workspaces import ACTIVE
 from app.core.security import to_ms
 from app.models.content import EnvFile, Notification, Project
@@ -21,10 +21,7 @@ def start_of_day(moment: datetime) -> datetime:
 
 
 @router.get("/dashboard", response_model=DashboardOut)
-async def dashboard(user: CurrentUser, db: Db) -> DashboardOut:
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only an admin can view the dashboard.")
-
+async def dashboard(admin: AdminUser, db: Db) -> DashboardOut:
     workspaces = await db.scalar(select(func.count()).select_from(Workspace).where(Workspace.status == ACTIVE)) or 0
     projects = await db.scalar(select(func.count()).select_from(Project).where(Project.status == ACTIVE)) or 0
     shared_envs = await db.scalar(

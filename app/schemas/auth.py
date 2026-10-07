@@ -17,10 +17,36 @@ class UserOut(BaseModel):
     logins: list[int]
 
 
+class UserCounts(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    all: int
+    project_managers: int = Field(serialization_alias="projectManagers")
+    devs: int
+
+
 class UserPage(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     data: list[UserOut]
+    current_page: int = Field(serialization_alias="currentPage")
+    total_pages: int = Field(serialization_alias="totalPages")
+    total_records: int = Field(serialization_alias="totalRecords")
+    limit: int
+    counts: UserCounts
+
+
+class UserWorkspaceOut(BaseModel):
+    id: str
+    name: str
+    access: str
+    members: int
+
+
+class UserWorkspacePage(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    data: list[UserWorkspaceOut]
     current_page: int = Field(serialization_alias="currentPage")
     total_pages: int = Field(serialization_alias="totalPages")
     total_records: int = Field(serialization_alias="totalRecords")
@@ -36,6 +62,7 @@ class SignupIn(BaseModel):
     name: str
     email: str
     password: str
+    phone: str
     role: str
 
 
